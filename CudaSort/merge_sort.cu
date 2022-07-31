@@ -3,9 +3,12 @@
 
 #include <stdio.h>
 
-cudaError_t mergeSortWithCuda(int* arr, unsigned int size);
+typedef struct mergeSortResult {
+    cudaError_t cudaStatus;
+    char* msg;
+} mergeSortResult_t;
 
-__global__ void mergeSortKernel(int *arr, int *aux, unsigned int blockSize, const unsigned int last)
+__global__ void mergeSortKernel(int* arr, int* aux, unsigned int blockSize, const unsigned int last)
 {
     int x = threadIdx.x;
     int start = blockSize * x;
@@ -33,44 +36,35 @@ __global__ void mergeSortKernel(int *arr, int *aux, unsigned int blockSize, cons
     }
 }
 
-cudaError_t mergeSortWithCuda(int *arr, unsigned int size)
-{
-    int *dev_arr = 0;
-    int *dev_aux = 0;
-    const unsigned int last = size - 1;
+inline mergeSortResult_t mergeSortError(cudaError_t cudaStatus, char* msg) {
+    mergeSortResult_t error;
+    error.cudaStatus = cudaStatus;
+    error.msg = msg;
+    return error;
+}
+
+inline mergeSortResult_t mergeSortSuccess() {
+    mergeSortResult_t success;
+    success.cudaStatus = cudaSuccess;
+    return success;
+}
+
+inline mergeSortResult_t doMergeSortWithCuda(int* arr, unsigned int count, int* dev_arr, int* dev_aux) {
+    const unsigned int last = count - 1;
+    const unsigned size = count * sizeof(int);
     unsigned int threadCount;
     cudaError_t cudaStatus;
-
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for two vectors (main and aux array).
-    cudaStatus = cudaMalloc((void**)&dev_arr, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_aux, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+    char msg[1024];
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_arr, arr, size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(dev_arr, arr, size, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
+        return mergeSortError(cudaStatus, "cudaMemcpy failed!");
     }
 
-    for (unsigned int blockSize = 2; blockSize < 2 * size; blockSize *= 2) {
-        threadCount = size / blockSize;
-        if (size % blockSize > 0) { threadCount++; }
+    for (unsigned int blockSize = 2; blockSize < 2 * count; blockSize *= 2) {
+        threadCount = count / blockSize;
+        if (count % blockSize > 0) { threadCount++; }
 
         // Launch a kernel on the GPU with one thread for each block.
         mergeSortKernel<<<1, threadCount>>>(dev_arr, dev_aux, blockSize, last);
@@ -78,30 +72,64 @@ cudaError_t mergeSortWithCuda(int *arr, unsigned int size)
         // Check for any errors launching the kernel
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "mergeSortKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            goto Error;
+            sprintf(msg, "mergeSortKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return mergeSortError(cudaStatus, msg);
         }
 
         // cudaDeviceSynchronize waits for the kernel to finish, and returns
         // any errors encountered during the launch.
         cudaStatus = cudaDeviceSynchronize();
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching mergeSortKernel!\n", cudaStatus);
-            goto Error;
+            sprintf(msg, "cudaDeviceSynchronize returned error code %d after launching mergeSortKernel!\n", cudaStatus);
+            return mergeSortError(cudaStatus, msg);
         }
     }
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(arr, dev_arr, size * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(arr, dev_arr, size, cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
+        return mergeSortError(cudaStatus, "cudaMemcpy failed!");
     }
 
-Error:
+    return mergeSortSuccess();
+}
+
+cudaError_t mergeSortWithCuda(int* arr, unsigned int count)
+{
+    const unsigned int size = count * sizeof(int);
+    int* dev_arr = 0;
+    int* dev_aux = 0;
+    cudaError_t cudaStatus;
+
+    // Choose which GPU to run on, change this on a multi-GPU system.
+    cudaStatus = cudaSetDevice(0);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaSetDevice failed! Do you have a CUDA-capable GPU installed?");
+        return cudaStatus;
+    }
+
+    // Allocate GPU buffers for two vectors (main and aux array).
+    cudaStatus = cudaMalloc((void**)&dev_arr, size);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        return cudaStatus;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_aux, size);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        cudaFree(dev_arr);
+        return cudaStatus;
+    }
+
+    mergeSortResult_t result = doMergeSortWithCuda(arr, count, dev_arr, dev_aux);
+
+    if (result.cudaStatus != cudaSuccess) {
+        fprintf(stderr, result.msg);
+    }
+
     cudaFree(dev_arr);
     cudaFree(dev_aux);
 
     return cudaStatus;
 }
-
