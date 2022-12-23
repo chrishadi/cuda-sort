@@ -69,9 +69,5 @@ int testMergeSortWithCuda(int* actual, int* expected, const unsigned int count) 
 }
 
 bool assertArrEq(int* expected, int* actual, size_t size) {
-    if (memcmp(expected, actual, size) != 0) {
-        return false;
-    }
-
-    return true;
+    return memcmp(expected, actual, size) == 0;
 }
