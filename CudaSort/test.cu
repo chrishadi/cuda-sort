@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define OK 1
+#define OK 0
 #define EXPECTATION_ERROR 1
 #define MALLOC_ERROR 2
 #define CUDA_ERROR 3
